@@ -8,39 +8,39 @@ import logging
 
 import voluptuous as vol
 
+from homeassistant.components.sensor import PLATFORM_SCHEMA
+from homeassistant.const import (
+    ATTR_LATITUDE, ATTR_LONGITUDE, STATE_UNKNOWN, CONF_HOST, CONF_PORT,
+    CONF_NAME)
 from homeassistant.helpers.entity import Entity
 import homeassistant.helpers.config_validation as cv
-from homeassistant.const import (ATTR_LATITUDE, ATTR_LONGITUDE, STATE_UNKNOWN,
-                                 CONF_HOST, CONF_PORT, CONF_PLATFORM,
-                                 CONF_NAME)
 
-REQUIREMENTS = ['gps3==0.33.2']
-
-DEFAULT_NAME = 'GPS'
-DEFAULT_HOST = 'localhost'
-DEFAULT_PORT = 2947
-
-ATTR_GPS_TIME = 'gps_time'
-ATTR_ELEVATION = 'elevation'
-ATTR_SPEED = 'speed'
-ATTR_CLIMB = 'climb'
-ATTR_MODE = 'mode'
-
-PLATFORM_SCHEMA = vol.Schema({
-    vol.Required(CONF_PLATFORM): 'gpsd',
-    vol.Optional(CONF_NAME): cv.string,
-    vol.Optional(CONF_HOST): cv.string,
-    vol.Optional(CONF_PORT): cv.string,
-})
+REQUIREMENTS = ['gps3==0.33.3']
 
 _LOGGER = logging.getLogger(__name__)
 
+ATTR_CLIMB = 'climb'
+ATTR_ELEVATION = 'elevation'
+ATTR_GPS_TIME = 'gps_time'
+ATTR_MODE = 'mode'
+ATTR_SPEED = 'speed'
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the GPSD component."""
-    name = config.get(CONF_NAME, DEFAULT_NAME)
-    host = config.get(CONF_HOST, DEFAULT_HOST)
-    port = config.get(CONF_PORT, DEFAULT_PORT)
+DEFAULT_HOST = 'localhost'
+DEFAULT_NAME = 'GPS'
+DEFAULT_PORT = 2947
+
+PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
+    vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
+    vol.Optional(CONF_HOST, default=DEFAULT_HOST): cv.string,
+    vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
+})
+
+
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the GPSD component."""
+    name = config.get(CONF_NAME)
+    host = config.get(CONF_HOST)
+    port = config.get(CONF_PORT)
 
     # Will hopefully be possible with the next gps3 update
     # https://github.com/wadda/gps3/issues/11
@@ -57,12 +57,12 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     try:
         sock.connect((host, port))
         sock.shutdown(2)
-        _LOGGER.debug('Connection to GPSD possible')
+        _LOGGER.debug("Connection to GPSD possible")
     except socket.error:
-        _LOGGER.error('Not able to connect to GPSD')
+        _LOGGER.error("Not able to connect to GPSD")
         return False
 
-    add_devices([GpsdSensor(hass, name, host, port)])
+    add_entities([GpsdSensor(hass, name, host, port)])
 
 
 class GpsdSensor(Entity):
@@ -86,19 +86,17 @@ class GpsdSensor(Entity):
         """Return the name."""
         return self._name
 
-    # pylint: disable=no-member
     @property
     def state(self):
         """Return the state of GPSD."""
         if self.agps_thread.data_stream.mode == 3:
             return "3D Fix"
-        elif self.agps_thread.data_stream.mode == 2:
+        if self.agps_thread.data_stream.mode == 2:
             return "2D Fix"
-        else:
-            return STATE_UNKNOWN
+        return STATE_UNKNOWN
 
     @property
-    def state_attributes(self):
+    def device_state_attributes(self):
         """Return the state attributes of the GPS."""
         return {
             ATTR_LATITUDE: self.agps_thread.data_stream.lat,

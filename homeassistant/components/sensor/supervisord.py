@@ -7,35 +7,48 @@ https://home-assistant.io/components/sensor.supervisord/
 import logging
 import xmlrpc.client
 
+import voluptuous as vol
+
+from homeassistant.components.sensor import PLATFORM_SCHEMA
+from homeassistant.const import CONF_URL
 from homeassistant.helpers.entity import Entity
+import homeassistant.helpers.config_validation as cv
 
 _LOGGER = logging.getLogger(__name__)
 
+ATTR_DESCRIPTION = 'description'
+ATTR_GROUP = 'group'
 
-# pylint: disable=unused-argument
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the Supervisord platform."""
+DEFAULT_URL = 'http://localhost:9001/RPC2'
+
+PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
+    vol.Optional(CONF_URL, default=DEFAULT_URL): cv.url,
+})
+
+
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the Supervisord platform."""
+    url = config.get(CONF_URL)
     try:
-        supervisor_server = xmlrpc.client.ServerProxy(
-            config.get('url', 'http://localhost:9001/RPC2'))
+        supervisor_server = xmlrpc.client.ServerProxy(url)
+        processes = supervisor_server.supervisor.getAllProcessInfo()
     except ConnectionRefusedError:
-        _LOGGER.error('Could not connect to Supervisord')
-        return
-    processes = supervisor_server.supervisor.getAllProcessInfo()
-    add_devices(
+        _LOGGER.error("Could not connect to Supervisord")
+        return False
+
+    add_entities(
         [SupervisorProcessSensor(info, supervisor_server)
-         for info in processes])
+         for info in processes], True)
 
 
 class SupervisorProcessSensor(Entity):
-    """Represent a supervisor-monitored process."""
+    """Representation of a supervisor-monitored process."""
 
-    # pylint: disable=abstract-method
     def __init__(self, info, server):
         """Initialize the sensor."""
         self._info = info
         self._server = server
-        self.update()
+        self._available = True
 
     @property
     def name(self):
@@ -47,15 +60,25 @@ class SupervisorProcessSensor(Entity):
         """Return the state of the sensor."""
         return self._info.get('statename')
 
-    def update(self):
-        """Update device state."""
-        self._info = self._server.supervisor.getProcessInfo(
-            self._info.get('name'))
+    @property
+    def available(self):
+        """Could the device be accessed during the last update call."""
+        return self._available
 
     @property
     def device_state_attributes(self):
         """Return the state attributes."""
         return {
-            'group': self._info.get('group'),
-            'description': self._info.get('description')
+            ATTR_DESCRIPTION: self._info.get('description'),
+            ATTR_GROUP: self._info.get('group'),
         }
+
+    def update(self):
+        """Update device state."""
+        try:
+            self._info = self._server.supervisor.getProcessInfo(
+                self._info.get('name'))
+            self._available = True
+        except ConnectionRefusedError:
+            _LOGGER.warning("Supervisord not available")
+            self._available = False

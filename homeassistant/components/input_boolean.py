@@ -9,11 +9,13 @@ import logging
 import voluptuous as vol
 
 from homeassistant.const import (
-    ATTR_ENTITY_ID, SERVICE_TURN_OFF, SERVICE_TURN_ON, STATE_ON)
+    ATTR_ENTITY_ID, CONF_ICON, CONF_NAME, SERVICE_TURN_OFF, SERVICE_TURN_ON,
+    SERVICE_TOGGLE, STATE_ON)
+from homeassistant.loader import bind_hass
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.entity import ToggleEntity
 from homeassistant.helpers.entity_component import EntityComponent
-from homeassistant.util import slugify
+from homeassistant.helpers.restore_state import RestoreEntity
 
 DOMAIN = 'input_boolean'
 
@@ -21,85 +23,75 @@ ENTITY_ID_FORMAT = DOMAIN + '.{}'
 
 _LOGGER = logging.getLogger(__name__)
 
-CONF_NAME = "name"
-CONF_INITIAL = "initial"
-CONF_ICON = "icon"
+CONF_INITIAL = 'initial'
 
-TOGGLE_SERVICE_SCHEMA = vol.Schema({
+SERVICE_SCHEMA = vol.Schema({
     vol.Optional(ATTR_ENTITY_ID): cv.entity_ids,
 })
 
+CONFIG_SCHEMA = vol.Schema({
+    DOMAIN: vol.Schema({
+        cv.slug: vol.Any({
+            vol.Optional(CONF_NAME): cv.string,
+            vol.Optional(CONF_INITIAL): cv.boolean,
+            vol.Optional(CONF_ICON): cv.icon,
+        }, None)
+    })
+}, extra=vol.ALLOW_EXTRA)
 
+
+@bind_hass
 def is_on(hass, entity_id):
     """Test if input_boolean is True."""
     return hass.states.is_state(entity_id, STATE_ON)
 
 
-def turn_on(hass, entity_id):
-    """Set input_boolean to True."""
-    hass.services.call(DOMAIN, SERVICE_TURN_ON, {ATTR_ENTITY_ID: entity_id})
-
-
-def turn_off(hass, entity_id):
-    """Set input_boolean to False."""
-    hass.services.call(DOMAIN, SERVICE_TURN_OFF, {ATTR_ENTITY_ID: entity_id})
-
-
-def setup(hass, config):
-    """Set up input boolean."""
-    if not isinstance(config.get(DOMAIN), dict):
-        _LOGGER.error('Expected %s config to be a dictionary', DOMAIN)
-        return False
-
+async def async_setup(hass, config):
+    """Set up an input boolean."""
     component = EntityComponent(_LOGGER, DOMAIN, hass)
 
     entities = []
 
     for object_id, cfg in config[DOMAIN].items():
-        if object_id != slugify(object_id):
-            _LOGGER.warning("Found invalid key for boolean input: %s. "
-                            "Use %s instead", object_id, slugify(object_id))
-            continue
         if not cfg:
             cfg = {}
 
         name = cfg.get(CONF_NAME)
-        state = cfg.get(CONF_INITIAL, False)
+        initial = cfg.get(CONF_INITIAL)
         icon = cfg.get(CONF_ICON)
 
-        entities.append(InputBoolean(object_id, name, state, icon))
+        entities.append(InputBoolean(object_id, name, initial, icon))
 
     if not entities:
         return False
 
-    def toggle_service(service):
-        """Handle a calls to the input boolean services."""
-        target_inputs = component.extract_from_service(service)
+    component.async_register_entity_service(
+        SERVICE_TURN_ON, SERVICE_SCHEMA,
+        'async_turn_on'
+    )
 
-        for input_b in target_inputs:
-            if service.service == SERVICE_TURN_ON:
-                input_b.turn_on()
-            else:
-                input_b.turn_off()
+    component.async_register_entity_service(
+        SERVICE_TURN_OFF, SERVICE_SCHEMA,
+        'async_turn_off'
+    )
 
-    hass.services.register(DOMAIN, SERVICE_TURN_OFF, toggle_service,
-                           schema=TOGGLE_SERVICE_SCHEMA)
-    hass.services.register(DOMAIN, SERVICE_TURN_ON, toggle_service,
-                           schema=TOGGLE_SERVICE_SCHEMA)
+    component.async_register_entity_service(
+        SERVICE_TOGGLE, SERVICE_SCHEMA,
+        'async_toggle'
+    )
 
-    component.add_entities(entities)
-
+    await component.async_add_entities(entities)
     return True
 
 
-class InputBoolean(ToggleEntity):
+class InputBoolean(ToggleEntity, RestoreEntity):
     """Representation of a boolean input."""
 
-    def __init__(self, object_id, name, state, icon):
+    def __init__(self, object_id, name, initial, icon):
         """Initialize a boolean input."""
         self.entity_id = ENTITY_ID_FORMAT.format(object_id)
         self._name = name
-        self._state = state
+        self._state = initial
         self._icon = icon
 
     @property
@@ -114,7 +106,7 @@ class InputBoolean(ToggleEntity):
 
     @property
     def icon(self):
-        """Returh the icon to be used for this entity."""
+        """Return the icon to be used for this entity."""
         return self._icon
 
     @property
@@ -122,12 +114,22 @@ class InputBoolean(ToggleEntity):
         """Return true if entity is on."""
         return self._state
 
-    def turn_on(self, **kwargs):
+    async def async_added_to_hass(self):
+        """Call when entity about to be added to hass."""
+        # If not None, we got an initial value.
+        await super().async_added_to_hass()
+        if self._state is not None:
+            return
+
+        state = await self.async_get_last_state()
+        self._state = state and state.state == STATE_ON
+
+    async def async_turn_on(self, **kwargs):
         """Turn the entity on."""
         self._state = True
-        self.update_ha_state()
+        await self.async_update_ha_state()
 
-    def turn_off(self, **kwargs):
+    async def async_turn_off(self, **kwargs):
         """Turn the entity off."""
         self._state = False
-        self.update_ha_state()
+        await self.async_update_ha_state()

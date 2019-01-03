@@ -1,5 +1,5 @@
 """Test component helpers."""
-# pylint: disable=protected-access,too-many-public-methods
+# pylint: disable=protected-access
 from collections import OrderedDict
 import unittest
 
@@ -11,11 +11,13 @@ from tests.common import get_test_home_assistant
 class TestHelpers(unittest.TestCase):
     """Tests homeassistant.helpers module."""
 
-    def setUp(self):  # pylint: disable=invalid-name
+    # pylint: disable=invalid-name
+    def setUp(self):
         """Init needed objects."""
         self.hass = get_test_home_assistant()
 
-    def tearDown(self):  # pylint: disable=invalid-name
+    # pylint: disable=invalid-name
+    def tearDown(self):
         """Stop everything that was started."""
         self.hass.stop()
 
@@ -29,8 +31,8 @@ class TestHelpers(unittest.TestCase):
             'zone 100': None,
         }
 
-        self.assertEqual(set(['zone', 'zone Hallo', 'zone 100']),
-                         set(helpers.extract_domain_configs(config, 'zone')))
+        assert set(['zone', 'zone Hallo', 'zone 100']) == \
+            set(helpers.extract_domain_configs(config, 'zone'))
 
     def test_config_per_platform(self):
         """Test config per platform method."""
@@ -45,5 +47,4 @@ class TestHelpers(unittest.TestCase):
             ('hello', config['zone']),
             (None, 1),
             ('hello 2', config['zone Hallo'][1]),
-            (None, None)
         ] == list(helpers.config_per_platform(config, 'zone'))

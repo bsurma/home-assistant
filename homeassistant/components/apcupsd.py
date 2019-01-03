@@ -7,50 +7,57 @@ https://home-assistant.io/components/apcupsd/
 import logging
 from datetime import timedelta
 
+import voluptuous as vol
+
+from homeassistant.const import (CONF_HOST, CONF_PORT)
+import homeassistant.helpers.config_validation as cv
 from homeassistant.util import Throttle
 
-DOMAIN = "apcupsd"
-REQUIREMENTS = ("apcaccess==0.0.4",)
+REQUIREMENTS = ['apcaccess==0.0.13']
 
-CONF_HOST = "host"
-CONF_PORT = "port"
-CONF_TYPE = "type"
+_LOGGER = logging.getLogger(__name__)
 
-DEFAULT_HOST = "localhost"
+CONF_TYPE = 'type'
+
+DATA = None
+DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 3551
+DOMAIN = 'apcupsd'
 
-KEY_STATUS = "STATUS"
-
-VALUE_ONLINE = "ONLINE"
+KEY_STATUS = 'STATUS'
 
 MIN_TIME_BETWEEN_UPDATES = timedelta(seconds=60)
 
-DATA = None
+VALUE_ONLINE = 'ONLINE'
 
-_LOGGER = logging.getLogger(__name__)
+CONFIG_SCHEMA = vol.Schema({
+    DOMAIN: vol.Schema({
+        vol.Optional(CONF_HOST, default=DEFAULT_HOST): cv.string,
+        vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
+    }),
+}, extra=vol.ALLOW_EXTRA)
 
 
 def setup(hass, config):
     """Use config values to set up a function enabling status retrieval."""
     global DATA
-
-    host = config[DOMAIN].get(CONF_HOST, DEFAULT_HOST)
-    port = config[DOMAIN].get(CONF_PORT, DEFAULT_PORT)
+    conf = config[DOMAIN]
+    host = conf.get(CONF_HOST)
+    port = conf.get(CONF_PORT)
 
     DATA = APCUPSdData(host, port)
 
     # It doesn't really matter why we're not able to get the status, just that
     # we can't.
-    # pylint: disable=broad-except
     try:
         DATA.update(no_throttle=True)
-    except Exception:
+    except Exception:  # pylint: disable=broad-except
         _LOGGER.exception("Failure while testing APCUPSd status retrieval.")
         return False
     return True
 
 
-class APCUPSdData(object):
+class APCUPSdData:
     """Stores the data retrieved from APCUPSd.
 
     For each entity to use, acts as the single point responsible for fetching
@@ -58,7 +65,7 @@ class APCUPSdData(object):
     """
 
     def __init__(self, host, port):
-        """Initialize the data oject."""
+        """Initialize the data object."""
         from apcaccess import status
         self._host = host
         self._port = port

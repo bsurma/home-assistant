@@ -4,21 +4,33 @@ Support for EnOcean sensors.
 For more details about this platform, please refer to the documentation at
 https://home-assistant.io/components/sensor.enocean/
 """
+import logging
 
-from homeassistant.const import CONF_NAME
+import voluptuous as vol
+
+from homeassistant.components.sensor import PLATFORM_SCHEMA
+from homeassistant.const import (CONF_NAME, CONF_ID)
 from homeassistant.helpers.entity import Entity
+import homeassistant.helpers.config_validation as cv
 from homeassistant.components import enocean
 
-DEPENDENCIES = ["enocean"]
+_LOGGER = logging.getLogger(__name__)
 
-CONF_ID = "id"
+DEFAULT_NAME = 'EnOcean sensor'
+DEPENDENCIES = ['enocean']
+
+PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
+    vol.Required(CONF_ID): vol.All(cv.ensure_list, [vol.Coerce(int)]),
+    vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
+})
 
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup an EnOcean sensor device."""
-    dev_id = config.get(CONF_ID, None)
-    devname = config.get(CONF_NAME, None)
-    add_devices([EnOceanSensor(dev_id, devname)])
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up an EnOcean sensor device."""
+    dev_id = config.get(CONF_ID)
+    devname = config.get(CONF_NAME)
+
+    add_entities([EnOceanSensor(dev_id, devname)])
 
 
 class EnOceanSensor(enocean.EnOceanDevice, Entity):
@@ -42,7 +54,7 @@ class EnOceanSensor(enocean.EnOceanDevice, Entity):
     def value_changed(self, value):
         """Update the internal state of the device."""
         self.power = value
-        self.update_ha_state()
+        self.schedule_update_ha_state()
 
     @property
     def state(self):
@@ -52,4 +64,4 @@ class EnOceanSensor(enocean.EnOceanDevice, Entity):
     @property
     def unit_of_measurement(self):
         """Return the unit of measurement."""
-        return "W"
+        return 'W'

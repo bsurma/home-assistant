@@ -7,14 +7,12 @@ https://home-assistant.io/components/sensor.thinkingcleaner/
 import logging
 from datetime import timedelta
 
-import homeassistant.util as util
+from homeassistant import util
 from homeassistant.helpers.entity import Entity
 
 _LOGGER = logging.getLogger(__name__)
 
-REQUIREMENTS = ['https://github.com/TheRealLink/pythinkingcleaner'
-                '/archive/v0.0.2.zip'
-                '#pythinkingcleaner==0.0.2']
+REQUIREMENTS = ['pythinkingcleaner==0.0.3']
 
 MIN_TIME_BETWEEN_SCANS = timedelta(seconds=10)
 MIN_TIME_BETWEEN_FORCED_SCANS = timedelta(milliseconds=100)
@@ -53,8 +51,8 @@ STATES = {
 }
 
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the ThinkingCleaner platform."""
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the ThinkingCleaner platform."""
     from pythinkingcleaner import Discovery
 
     discovery = Discovery()
@@ -72,11 +70,11 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
             dev.append(ThinkingCleanerSensor(device, type_name,
                                              update_devices))
 
-    add_devices(dev)
+    add_entities(dev)
 
 
 class ThinkingCleanerSensor(Entity):
-    """ThinkingCleaner Sensor."""
+    """Representation of a ThinkingCleaner Sensor."""
 
     def __init__(self, tc_object, sensor_type, update_devices):
         """Initialize the ThinkingCleaner."""
@@ -90,7 +88,7 @@ class ThinkingCleanerSensor(Entity):
     @property
     def name(self):
         """Return the name of the sensor."""
-        return self._tc_object.name + ' ' + SENSOR_TYPES[self.type][0]
+        return '{} {}'.format(self._tc_object.name, SENSOR_TYPES[self.type][0])
 
     @property
     def icon(self):

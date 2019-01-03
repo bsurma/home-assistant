@@ -7,29 +7,31 @@ https://home-assistant.io/components/logentries/
 import json
 import logging
 import requests
-import homeassistant.util as util
-from homeassistant.const import EVENT_STATE_CHANGED
+
+import voluptuous as vol
+
+import homeassistant.helpers.config_validation as cv
+from homeassistant.const import (CONF_TOKEN, EVENT_STATE_CHANGED)
 from homeassistant.helpers import state as state_helper
-from homeassistant.helpers import validate_config
 
 _LOGGER = logging.getLogger(__name__)
 
-DOMAIN = "logentries"
-DEPENDENCIES = []
+DOMAIN = 'logentries'
 
 DEFAULT_HOST = 'https://webhook.logentries.com/noformat/logs/'
 
-CONF_TOKEN = 'token'
+CONFIG_SCHEMA = vol.Schema({
+    DOMAIN: vol.Schema({
+        vol.Required(CONF_TOKEN): cv.string,
+    }),
+}, extra=vol.ALLOW_EXTRA)
 
 
 def setup(hass, config):
-    """Setup the Logentries component."""
-    if not validate_config(config, {DOMAIN: ['token']}, _LOGGER):
-        _LOGGER.error("Logentries token not present")
-        return False
+    """Set up the Logentries component."""
     conf = config[DOMAIN]
-    token = util.convert(conf.get(CONF_TOKEN), str)
-    le_wh = DEFAULT_HOST + token
+    token = conf.get(CONF_TOKEN)
+    le_wh = '{}{}'.format(DEFAULT_HOST, token)
 
     def logentries_event_listener(event):
         """Listen for new messages on the bus and sends them to Logentries."""
@@ -50,11 +52,13 @@ def setup(hass, config):
             }
         ]
         try:
-            payload = {"host": le_wh,
-                       "event": json_body}
+            payload = {
+                "host": le_wh,
+                "event": json_body
+            }
             requests.post(le_wh, data=json.dumps(payload), timeout=10)
         except requests.exceptions.RequestException as error:
-            _LOGGER.exception('Error sending to Logentries: %s', error)
+            _LOGGER.exception("Error sending to Logentries: %s", error)
 
     hass.bus.listen(EVENT_STATE_CHANGED, logentries_event_listener)
 

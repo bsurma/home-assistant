@@ -6,40 +6,37 @@ https://home-assistant.io/components/dweet/
 """
 import logging
 from datetime import timedelta
+
 import voluptuous as vol
 
-from homeassistant.const import EVENT_STATE_CHANGED, STATE_UNKNOWN
+from homeassistant.const import (
+    CONF_NAME, CONF_WHITELIST, EVENT_STATE_CHANGED, STATE_UNKNOWN)
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import state as state_helper
 from homeassistant.util import Throttle
 
+REQUIREMENTS = ['dweepy==0.3.0']
 
 _LOGGER = logging.getLogger(__name__)
 
-DOMAIN = "dweet"
-DEPENDENCIES = []
-
-REQUIREMENTS = ['dweepy==0.2.0']
-
-CONF_NAME = 'name'
-CONF_WHITELIST = 'whitelist'
+DOMAIN = 'dweet'
 
 MIN_TIME_BETWEEN_UPDATES = timedelta(seconds=1)
 
 CONFIG_SCHEMA = vol.Schema({
     DOMAIN: vol.Schema({
         vol.Required(CONF_NAME): cv.string,
-        vol.Required(CONF_WHITELIST): cv.string,
+        vol.Required(CONF_WHITELIST, default=[]):
+            vol.All(cv.ensure_list, [cv.entity_id]),
     }),
 }, extra=vol.ALLOW_EXTRA)
 
 
-# pylint: disable=too-many-locals
 def setup(hass, config):
-    """Setup the Dweet.io component."""
+    """Set up the Dweet.io component."""
     conf = config[DOMAIN]
-    name = conf[CONF_NAME]
-    whitelist = conf.get(CONF_WHITELIST, [])
+    name = conf.get(CONF_NAME)
+    whitelist = conf.get(CONF_WHITELIST)
     json_body = {}
 
     def dweet_event_listener(event):
@@ -70,4 +67,4 @@ def send_data(name, msg):
     try:
         dweepy.dweet_for(name, msg)
     except dweepy.DweepyError:
-        _LOGGER.error("Error saving data '%s' to Dweet.io", msg)
+        _LOGGER.error("Error saving data to Dweet.io: %s", msg)

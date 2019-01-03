@@ -6,40 +6,42 @@ https://home-assistant.io/components/switch.wink/
 """
 import logging
 
-from homeassistant.components.wink import WinkDevice
-from homeassistant.const import CONF_ACCESS_TOKEN
+from homeassistant.components.wink import DOMAIN, WinkDevice
 from homeassistant.helpers.entity import ToggleEntity
 
-REQUIREMENTS = ['python-wink==0.7.11', 'pubnub==3.8.2']
+DEPENDENCIES = ['wink']
+
+_LOGGER = logging.getLogger(__name__)
 
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the Wink platform."""
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the Wink platform."""
     import pywink
 
-    if discovery_info is None:
-        token = config.get(CONF_ACCESS_TOKEN)
-
-        if token is None:
-            logging.getLogger(__name__).error(
-                "Missing wink access_token. "
-                "Get one at https://winkbearertoken.appspot.com/")
-            return
-
-        pywink.set_bearer_token(token)
-
-    add_devices(WinkToggleDevice(switch) for switch in pywink.get_switches())
-    add_devices(WinkToggleDevice(switch) for switch in
-                pywink.get_powerstrip_outlets())
-    add_devices(WinkToggleDevice(switch) for switch in pywink.get_sirens())
+    for switch in pywink.get_switches():
+        _id = switch.object_id() + switch.name()
+        if _id not in hass.data[DOMAIN]['unique_ids']:
+            add_entities([WinkToggleDevice(switch, hass)])
+    for switch in pywink.get_powerstrips():
+        _id = switch.object_id() + switch.name()
+        if _id not in hass.data[DOMAIN]['unique_ids']:
+            add_entities([WinkToggleDevice(switch, hass)])
+    for sprinkler in pywink.get_sprinklers():
+        _id = sprinkler.object_id() + sprinkler.name()
+        if _id not in hass.data[DOMAIN]['unique_ids']:
+            add_entities([WinkToggleDevice(sprinkler, hass)])
+    for switch in pywink.get_binary_switch_groups():
+        _id = switch.object_id() + switch.name()
+        if _id not in hass.data[DOMAIN]['unique_ids']:
+            add_entities([WinkToggleDevice(switch, hass)])
 
 
 class WinkToggleDevice(WinkDevice, ToggleEntity):
-    """Represents a Wink toggle (switch) device."""
+    """Representation of a Wink toggle device."""
 
-    def __init__(self, wink):
-        """Initialize the Wink device."""
-        WinkDevice.__init__(self, wink)
+    async def async_added_to_hass(self):
+        """Call when entity is added to hass."""
+        self.hass.data[DOMAIN]['entities']['switch'].append(self)
 
     @property
     def is_on(self):
@@ -50,6 +52,18 @@ class WinkToggleDevice(WinkDevice, ToggleEntity):
         """Turn the device on."""
         self.wink.set_state(True)
 
-    def turn_off(self):
+    def turn_off(self, **kwargs):
         """Turn the device off."""
         self.wink.set_state(False)
+
+    @property
+    def device_state_attributes(self):
+        """Return the state attributes."""
+        attributes = super(WinkToggleDevice, self).device_state_attributes
+        try:
+            event = self.wink.last_event()
+            if event is not None:
+                attributes["last_event"] = event
+        except AttributeError:
+            pass
+        return attributes

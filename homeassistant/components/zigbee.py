@@ -1,27 +1,33 @@
 """
-Support for ZigBee devices.
+Support for Zigbee devices.
 
 For more details about this component, please refer to the documentation at
 https://home-assistant.io/components/zigbee/
 """
 import logging
-import pickle
 from binascii import hexlify, unhexlify
-from base64 import b64encode, b64decode
 
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import JobPriority
+import voluptuous as vol
+
+from homeassistant.const import (
+    EVENT_HOMEASSISTANT_STOP, CONF_DEVICE, CONF_NAME, CONF_PIN)
 from homeassistant.helpers.entity import Entity
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.dispatcher import (
+    async_dispatcher_connect, dispatcher_send)
 
-DOMAIN = "zigbee"
-REQUIREMENTS = ("xbee-helper==0.0.7",)
+REQUIREMENTS = ['xbee-helper==0.0.7']
 
-EVENT_ZIGBEE_FRAME_RECEIVED = "zigbee_frame_received"
+_LOGGER = logging.getLogger(__name__)
 
-CONF_DEVICE = "device"
-CONF_BAUD = "baud"
+DOMAIN = 'zigbee'
 
-DEFAULT_DEVICE = "/dev/ttyUSB0"
+SIGNAL_ZIGBEE_FRAME_RECEIVED = 'zigbee_frame_received'
+
+CONF_ADDRESS = 'address'
+CONF_BAUD = 'baud'
+
+DEFAULT_DEVICE = '/dev/ttyUSB0'
 DEFAULT_BAUD = 9600
 DEFAULT_ADC_MAX_VOLTS = 1.2
 
@@ -35,15 +41,26 @@ CONVERT_ADC = None
 ZIGBEE_EXCEPTION = None
 ZIGBEE_TX_FAILURE = None
 
-ATTR_FRAME = "frame"
+ATTR_FRAME = 'frame'
 
 DEVICE = None
 
-_LOGGER = logging.getLogger(__name__)
+CONFIG_SCHEMA = vol.Schema({
+    DOMAIN: vol.Schema({
+        vol.Optional(CONF_BAUD, default=DEFAULT_BAUD): cv.string,
+        vol.Optional(CONF_DEVICE, default=DEFAULT_DEVICE): cv.string,
+    }),
+}, extra=vol.ALLOW_EXTRA)
+
+PLATFORM_SCHEMA = vol.Schema({
+    vol.Required(CONF_NAME): cv.string,
+    vol.Optional(CONF_PIN): cv.positive_int,
+    vol.Optional(CONF_ADDRESS): cv.string,
+}, extra=vol.ALLOW_EXTRA)
 
 
 def setup(hass, config):
-    """Setup the connection to the ZigBee device."""
+    """Set up the connection to the Zigbee device."""
     global DEVICE
     global GPIO_DIGITAL_OUTPUT_LOW
     global GPIO_DIGITAL_OUTPUT_HIGH
@@ -74,20 +91,18 @@ def setup(hass, config):
     try:
         ser = Serial(usb_device, baud)
     except SerialException as exc:
-        _LOGGER.exception("Unable to open serial port for ZigBee: %s", exc)
+        _LOGGER.exception("Unable to open serial port for Zigbee: %s", exc)
         return False
     DEVICE = ZigBee(ser)
     hass.bus.listen_once(EVENT_HOMEASSISTANT_STOP, close_serial_port)
 
     def _frame_received(frame):
-        """Called when a ZigBee frame is received.
+        """Run when a Zigbee frame is received.
 
         Pickles the frame, then encodes it into base64 since it contains
         non JSON serializable binary.
         """
-        hass.bus.fire(
-            EVENT_ZIGBEE_FRAME_RECEIVED,
-            {ATTR_FRAME: b64encode(pickle.dumps(frame)).decode("ascii")})
+        dispatcher_send(hass, SIGNAL_ZIGBEE_FRAME_RECEIVED, frame)
 
     DEVICE.add_frame_rx_handler(_frame_received)
 
@@ -95,30 +110,20 @@ def setup(hass, config):
 
 
 def close_serial_port(*args):
-    """Close the serial port we're using to communicate with the ZigBee."""
+    """Close the serial port we're using to communicate with the Zigbee."""
     DEVICE.zb.serial.close()
 
 
 def frame_is_relevant(entity, frame):
     """Test whether the frame is relevant to the entity."""
-    if frame.get("source_addr_long") != entity.config.address:
+    if frame.get('source_addr_long') != entity.config.address:
         return False
-    if "samples" not in frame:
+    if 'samples' not in frame:
         return False
     return True
 
 
-def subscribe(hass, callback):
-    """Subscribe to incoming ZigBee frames."""
-    def zigbee_frame_subscriber(event):
-        """Decode and unpickle the frame from the event bus, and call back."""
-        frame = pickle.loads(b64decode(event.data[ATTR_FRAME]))
-        callback(frame)
-
-    hass.bus.listen(EVENT_ZIGBEE_FRAME_RECEIVED, zigbee_frame_subscriber)
-
-
-class ZigBeeConfig(object):
+class ZigBeeConfig:
     """Handle the fetching of configuration from the config file."""
 
     def __init__(self, config):
@@ -128,15 +133,15 @@ class ZigBeeConfig(object):
 
     @property
     def name(self):
-        """The name given to the entity."""
+        """Return the name given to the entity."""
         return self._config["name"]
 
     @property
     def address(self):
-        """The address of the device.
+        """Return the address of the device.
 
         If an address has been provided, unhexlify it, otherwise return None
-        as we're talking to our local ZigBee device.
+        as we're talking to our local Zigbee device.
         """
         address = self._config.get("address")
         if address is not None:
@@ -145,16 +150,16 @@ class ZigBeeConfig(object):
 
     @property
     def should_poll(self):
-        """No polling needed."""
+        """Return the polling state."""
         return self._should_poll
 
 
 class ZigBeePinConfig(ZigBeeConfig):
-    """Handle the fetching of configuration from the config file."""
+    """Handle the fetching of configuration from the configuration file."""
 
     @property
     def pin(self):
-        """The GPIO pin number."""
+        """Return the GPIO pin number."""
         return self._config["pin"]
 
 
@@ -162,7 +167,7 @@ class ZigBeeDigitalInConfig(ZigBeePinConfig):
     """A subclass of ZigBeePinConfig."""
 
     def __init__(self, config):
-        """Initialise the ZigBee Digital input config."""
+        """Initialise the Zigbee Digital input config."""
         super(ZigBeeDigitalInConfig, self).__init__(config)
         self._bool2state, self._state2bool = self.boolean_maps
 
@@ -189,7 +194,7 @@ class ZigBeeDigitalInConfig(ZigBeePinConfig):
 
     @property
     def bool2state(self):
-        """A dictionary mapping the internal value to the ZigBee value.
+        """Return a dictionary mapping the internal value to the Zigbee value.
 
         For the translation of on/off as being pin high or low.
         """
@@ -197,7 +202,7 @@ class ZigBeeDigitalInConfig(ZigBeePinConfig):
 
     @property
     def state2bool(self):
-        """A dictionary mapping the ZigBee value to the internal value.
+        """Return a dictionary mapping the Zigbee value to the internal value.
 
         For the translation of pin high/low as being on or off.
         """
@@ -212,7 +217,7 @@ class ZigBeeDigitalOutConfig(ZigBeePinConfig):
     """
 
     def __init__(self, config):
-        """Initialize the ZigBee Digital out."""
+        """Initialize the Zigbee Digital out."""
         super(ZigBeeDigitalOutConfig, self).__init__(config)
         self._bool2state, self._state2bool = self.boolean_maps
         self._should_poll = config.get("poll", False)
@@ -239,7 +244,7 @@ class ZigBeeDigitalOutConfig(ZigBeePinConfig):
 
     @property
     def bool2state(self):
-        """A dictionary mapping booleans to GPIOSetting objects.
+        """Return a dictionary mapping booleans to GPIOSetting objects.
 
         For the translation of on/off as being pin high or low.
         """
@@ -247,7 +252,7 @@ class ZigBeeDigitalOutConfig(ZigBeePinConfig):
 
     @property
     def state2bool(self):
-        """A dictionary mapping GPIOSetting objects to booleans.
+        """Return a dictionary mapping GPIOSetting objects to booleans.
 
         For the translation of pin high/low as being on or off.
         """
@@ -255,11 +260,11 @@ class ZigBeeDigitalOutConfig(ZigBeePinConfig):
 
 
 class ZigBeeAnalogInConfig(ZigBeePinConfig):
-    """Representation of a ZigBee GPIO pin set to analog in."""
+    """Representation of a Zigbee GPIO pin set to analog in."""
 
     @property
     def max_voltage(self):
-        """The voltage at which the ADC will report its highest value."""
+        """Return the voltage for ADC to report its highest value."""
         return float(self._config.get("max_volts", DEFAULT_ADC_MAX_VOLTS))
 
 
@@ -271,6 +276,8 @@ class ZigBeeDigitalIn(Entity):
         self._config = config
         self._state = False
 
+    async def async_added_to_hass(self):
+        """Register callbacks."""
         def handle_frame(frame):
             """Handle an incoming frame.
 
@@ -279,19 +286,19 @@ class ZigBeeDigitalIn(Entity):
             """
             if not frame_is_relevant(self, frame):
                 return
-            sample = frame["samples"].pop()
+            sample = next(iter(frame['samples']))
             pin_name = DIGITAL_PINS[self._config.pin]
             if pin_name not in sample:
                 # Doesn't contain information about our pin
                 return
-            self._state = self._config.state2bool[sample[pin_name]]
-            self.update_ha_state()
+            # Set state to the value of sample, respecting any inversion
+            # logic from the on_state config variable.
+            self._state = self._config.state2bool[
+                self._config.bool2state[sample[pin_name]]]
+            self.schedule_update_ha_state()
 
-        subscribe(hass, handle_frame)
-
-        # Get initial state
-        hass.pool.add_job(
-            JobPriority.EVENT_STATE, (self.update_ha_state, True))
+        async_dispatcher_connect(
+            self.hass, SIGNAL_ZIGBEE_FRAME_RECEIVED, handle_frame)
 
     @property
     def name(self):
@@ -300,7 +307,7 @@ class ZigBeeDigitalIn(Entity):
 
     @property
     def config(self):
-        """The entity's configuration."""
+        """Return the entity's configuration."""
         return self._config
 
     @property
@@ -314,7 +321,7 @@ class ZigBeeDigitalIn(Entity):
         return self._state
 
     def update(self):
-        """Ask the ZigBee device what state its input pin is in."""
+        """Ask the Zigbee device what state its input pin is in."""
         try:
             sample = DEVICE.get_sample(self._config.address)
         except ZIGBEE_TX_FAILURE:
@@ -324,12 +331,12 @@ class ZigBeeDigitalIn(Entity):
             return
         except ZIGBEE_EXCEPTION as exc:
             _LOGGER.exception(
-                "Unable to get sample from ZigBee device: %s", exc)
+                "Unable to get sample from Zigbee device: %s", exc)
             return
         pin_name = DIGITAL_PINS[self._config.pin]
         if pin_name not in sample:
             _LOGGER.warning(
-                "Pin %s (%s) was not in the sample provided by ZigBee device "
+                "Pin %s (%s) was not in the sample provided by Zigbee device "
                 "%s.",
                 self._config.pin, pin_name, hexlify(self._config.address))
             return
@@ -357,7 +364,7 @@ class ZigBeeDigitalOut(ZigBeeDigitalIn):
             return
         self._state = state
         if not self.should_poll:
-            self.update_ha_state()
+            self.schedule_update_ha_state()
 
     def turn_on(self, **kwargs):
         """Set the digital output to its 'on' state."""
@@ -394,6 +401,8 @@ class ZigBeeAnalogIn(Entity):
         self._config = config
         self._value = None
 
+    async def async_added_to_hass(self):
+        """Register callbacks."""
         def handle_frame(frame):
             """Handle an incoming frame.
 
@@ -402,7 +411,7 @@ class ZigBeeAnalogIn(Entity):
             """
             if not frame_is_relevant(self, frame):
                 return
-            sample = frame["samples"].pop()
+            sample = frame['samples'].pop()
             pin_name = ANALOG_PINS[self._config.pin]
             if pin_name not in sample:
                 # Doesn't contain information about our pin
@@ -412,27 +421,24 @@ class ZigBeeAnalogIn(Entity):
                 ADC_PERCENTAGE,
                 self._config.max_voltage
             )
-            self.update_ha_state()
+            self.schedule_update_ha_state()
 
-        subscribe(hass, handle_frame)
-
-        # Get initial state
-        hass.pool.add_job(
-            JobPriority.EVENT_STATE, (self.update_ha_state, True))
+        async_dispatcher_connect(
+            self.hass, SIGNAL_ZIGBEE_FRAME_RECEIVED, handle_frame)
 
     @property
     def name(self):
-        """The name of the input."""
+        """Return the name of the input."""
         return self._config.name
 
     @property
     def config(self):
-        """The entity's configuration."""
+        """Return the entity's configuration."""
         return self._config
 
     @property
     def should_poll(self):
-        """The state of the polling, if needed."""
+        """Return the polling state, if needed."""
         return self._config.should_poll
 
     @property

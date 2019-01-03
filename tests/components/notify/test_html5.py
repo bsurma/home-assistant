@@ -1,38 +1,85 @@
 """Test HTML5 notify platform."""
 import json
-import tempfile
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
+from aiohttp.hdrs import AUTHORIZATION
 
-from werkzeug.test import EnvironBuilder
-
-from homeassistant.components.http import request_class
+from homeassistant.setup import async_setup_component
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components.notify import html5
 
+CONFIG_FILE = 'file.conf'
 
-class TestHtml5Notify(object):
+SUBSCRIPTION_1 = {
+    'browser': 'chrome',
+    'subscription': {
+        'endpoint': 'https://googleapis.com',
+        'keys': {'auth': 'auth', 'p256dh': 'p256dh'}
+    },
+}
+SUBSCRIPTION_2 = {
+    'browser': 'firefox',
+    'subscription': {
+        'endpoint': 'https://example.com',
+        'keys': {
+            'auth': 'bla',
+            'p256dh': 'bla',
+        },
+    },
+}
+SUBSCRIPTION_3 = {
+    'browser': 'chrome',
+    'subscription': {
+        'endpoint': 'https://example.com/not_exist',
+        'keys': {
+            'auth': 'bla',
+            'p256dh': 'bla',
+        },
+    },
+}
+SUBSCRIPTION_4 = {
+    'browser': 'chrome',
+    'subscription': {
+        'endpoint': 'https://googleapis.com',
+        'expirationTime': None,
+        'keys': {'auth': 'auth', 'p256dh': 'p256dh'}
+    },
+}
+
+REGISTER_URL = '/api/notify.html5'
+PUBLISH_URL = '/api/notify.html5/callback'
+
+
+async def mock_client(hass, hass_client, registrations=None):
+    """Create a test client for HTML5 views."""
+    if registrations is None:
+        registrations = {}
+
+    with patch('homeassistant.components.notify.html5._load_config',
+               return_value=registrations):
+        await async_setup_component(hass, 'notify', {
+            'notify': {
+                'platform': 'html5'
+            }
+        })
+
+    return await hass_client()
+
+
+class TestHtml5Notify:
     """Tests for HTML5 notify platform."""
 
     def test_get_service_with_no_json(self):
         """Test empty json file."""
         hass = MagicMock()
 
-        with tempfile.NamedTemporaryFile() as fp:
-            hass.config.path.return_value = fp.name
+        m = mock_open()
+        with patch(
+            'homeassistant.util.json.open',
+            m, create=True
+        ):
             service = html5.get_service(hass, {})
 
         assert service is not None
-
-    def test_get_service_with_bad_json(self):
-        """Test ."""
-        hass = MagicMock()
-
-        with tempfile.NamedTemporaryFile() as fp:
-            fp.write('I am not JSON'.encode('utf-8'))
-            fp.flush()
-            hass.config.path.return_value = fp.name
-            service = html5.get_service(hass, {})
-
-        assert service is None
 
     @patch('pywebpush.WebPusher')
     def test_sending_message(self, mock_wp):
@@ -40,16 +87,14 @@ class TestHtml5Notify(object):
         hass = MagicMock()
 
         data = {
-            'device': {
-                'browser': 'chrome',
-                'subscription': 'hello world',
-            }
+            'device': SUBSCRIPTION_1
         }
 
-        with tempfile.NamedTemporaryFile() as fp:
-            fp.write(json.dumps(data).encode('utf-8'))
-            fp.flush()
-            hass.config.path.return_value = fp.name
+        m = mock_open(read_data=json.dumps(data))
+        with patch(
+            'homeassistant.util.json.open',
+            m, create=True
+        ):
             service = html5.get_service(hass, {'gcm_sender_id': '100'})
 
         assert service is not None
@@ -57,89 +102,256 @@ class TestHtml5Notify(object):
         service.send_message('Hello', target=['device', 'non_existing'],
                              data={'icon': 'beer.png'})
 
-        assert len(mock_wp.mock_calls) == 2
+        assert len(mock_wp.mock_calls) == 3
 
         # WebPusher constructor
-        assert mock_wp.mock_calls[0][1][0] == 'hello world'
+        assert mock_wp.mock_calls[0][1][0] == SUBSCRIPTION_1['subscription']
+        # Third mock_call checks the status_code of the response.
+        assert mock_wp.mock_calls[2][0] == '().send().status_code.__eq__'
 
         # Call to send
         payload = json.loads(mock_wp.mock_calls[1][1][0])
 
-        assert payload['title'] == 'Hello'
+        assert payload['body'] == 'Hello'
         assert payload['icon'] == 'beer.png'
 
-    def test_registering_new_device_view(self):
-        """Test that the HTML view works."""
+    @patch('pywebpush.WebPusher')
+    def test_gcm_key_include(self, mock_wp):
+        """Test if the gcm_key is only included for GCM endpoints."""
         hass = MagicMock()
 
-        with tempfile.NamedTemporaryFile() as fp:
-            hass.config.path.return_value = fp.name
-            fp.close()
-            service = html5.get_service(hass, {})
+        data = {
+            'chrome': SUBSCRIPTION_1,
+            'firefox': SUBSCRIPTION_2
+        }
 
-            assert service is not None
+        m = mock_open(read_data=json.dumps(data))
+        with patch('homeassistant.util.json.open', m, create=True):
+            service = html5.get_service(hass, {
+                'gcm_sender_id': '100',
+                'gcm_api_key': 'Y6i0JdZ0mj9LOaSI'
+            })
 
-            # assert hass.called
-            assert len(hass.mock_calls) == 2
+        assert service is not None
 
-            view = hass.mock_calls[1][1][0]
-            assert view.json_path == fp.name
-            assert view.registrations == {}
+        service.send_message('Hello', target=['chrome', 'firefox'])
 
-            builder = EnvironBuilder(method='POST', data=json.dumps({
-                'browser': 'chrome',
-                'subscription': 'sub info',
-            }))
-            Request = request_class()
-            resp = view.post(Request(builder.get_environ()))
+        assert len(mock_wp.mock_calls) == 6
 
-            expected = {
-                'unnamed device': {
-                    'browser': 'chrome',
-                    'subscription': 'sub info',
-                },
-            }
+        # WebPusher constructor
+        assert mock_wp.mock_calls[0][1][0] == SUBSCRIPTION_1['subscription']
+        assert mock_wp.mock_calls[3][1][0] == SUBSCRIPTION_2['subscription']
 
-            assert resp.status_code == 200, resp.response
-            assert view.registrations == expected
-            with open(fp.name) as fpp:
-                assert json.load(fpp) == expected
+        # Third mock_call checks the status_code of the response.
+        assert mock_wp.mock_calls[2][0] == '().send().status_code.__eq__'
+        assert mock_wp.mock_calls[5][0] == '().send().status_code.__eq__'
 
-    def test_registering_new_device_validation(self):
-        """Test various errors when registering a new device."""
-        hass = MagicMock()
+        # Get the keys passed to the WebPusher's send method
+        assert mock_wp.mock_calls[1][2]['gcm_key'] is not None
+        assert mock_wp.mock_calls[4][2]['gcm_key'] is None
 
-        with tempfile.NamedTemporaryFile() as fp:
-            hass.config.path.return_value = fp.name
-            service = html5.get_service(hass, {})
 
-            assert service is not None
+async def test_registering_new_device_view(hass, hass_client):
+    """Test that the HTML view works."""
+    client = await mock_client(hass, hass_client)
 
-            # assert hass.called
-            assert len(hass.mock_calls) == 2
+    with patch('homeassistant.components.notify.html5.save_json') as mock_save:
+        resp = await client.post(REGISTER_URL, data=json.dumps(SUBSCRIPTION_1))
 
-            view = hass.mock_calls[1][1][0]
+    assert resp.status == 200
+    assert len(mock_save.mock_calls) == 1
+    assert mock_save.mock_calls[0][1][1] == {
+        'unnamed device': SUBSCRIPTION_1,
+    }
 
-            Request = request_class()
 
-            builder = EnvironBuilder(method='POST', data=json.dumps({
-                'browser': 'invalid browser',
-                'subscription': 'sub info',
-            }))
-            resp = view.post(Request(builder.get_environ()))
-            assert resp.status_code == 400, resp.response
+async def test_registering_new_device_expiration_view(hass, hass_client):
+    """Test that the HTML view works."""
+    client = await mock_client(hass, hass_client)
 
-            builder = EnvironBuilder(method='POST', data=json.dumps({
-                'browser': 'chrome',
-            }))
-            resp = view.post(Request(builder.get_environ()))
-            assert resp.status_code == 400, resp.response
+    with patch('homeassistant.components.notify.html5.save_json') as mock_save:
+        resp = await client.post(REGISTER_URL, data=json.dumps(SUBSCRIPTION_4))
 
-            builder = EnvironBuilder(method='POST', data=json.dumps({
-                'browser': 'chrome',
-                'subscription': 'sub info',
-            }))
-            with patch('homeassistant.components.notify.html5._save_config',
-                       return_value=False):
-                resp = view.post(Request(builder.get_environ()))
-            assert resp.status_code == 500, resp.response
+    assert resp.status == 200
+    assert mock_save.mock_calls[0][1][1] == {
+        'unnamed device': SUBSCRIPTION_4,
+    }
+
+
+async def test_registering_new_device_fails_view(hass, hass_client):
+    """Test subs. are not altered when registering a new device fails."""
+    registrations = {}
+    client = await mock_client(hass, hass_client, registrations)
+
+    with patch('homeassistant.components.notify.html5.save_json',
+               side_effect=HomeAssistantError()):
+        resp = await client.post(REGISTER_URL, data=json.dumps(SUBSCRIPTION_4))
+
+    assert resp.status == 500
+    assert registrations == {}
+
+
+async def test_registering_existing_device_view(hass, hass_client):
+    """Test subscription is updated when registering existing device."""
+    registrations = {}
+    client = await mock_client(hass, hass_client, registrations)
+
+    with patch('homeassistant.components.notify.html5.save_json') as mock_save:
+        await client.post(REGISTER_URL, data=json.dumps(SUBSCRIPTION_1))
+        resp = await client.post(REGISTER_URL, data=json.dumps(SUBSCRIPTION_4))
+
+    assert resp.status == 200
+    assert mock_save.mock_calls[0][1][1] == {
+        'unnamed device': SUBSCRIPTION_4,
+    }
+    assert registrations == {
+        'unnamed device': SUBSCRIPTION_4,
+    }
+
+
+async def test_registering_existing_device_fails_view(hass, hass_client):
+    """Test sub. is not updated when registering existing device fails."""
+    registrations = {}
+    client = await mock_client(hass, hass_client, registrations)
+
+    with patch('homeassistant.components.notify.html5.save_json') as mock_save:
+        await client.post(REGISTER_URL, data=json.dumps(SUBSCRIPTION_1))
+        mock_save.side_effect = HomeAssistantError
+        resp = await client.post(REGISTER_URL, data=json.dumps(SUBSCRIPTION_4))
+
+    assert resp.status == 500
+    assert registrations == {
+        'unnamed device': SUBSCRIPTION_1,
+    }
+
+
+async def test_registering_new_device_validation(hass, hass_client):
+    """Test various errors when registering a new device."""
+    client = await mock_client(hass, hass_client)
+
+    resp = await client.post(REGISTER_URL, data=json.dumps({
+        'browser': 'invalid browser',
+        'subscription': 'sub info',
+    }))
+    assert resp.status == 400
+
+    resp = await client.post(REGISTER_URL, data=json.dumps({
+        'browser': 'chrome',
+    }))
+    assert resp.status == 400
+
+    with patch('homeassistant.components.notify.html5.save_json',
+               return_value=False):
+        resp = await client.post(REGISTER_URL, data=json.dumps({
+            'browser': 'chrome',
+            'subscription': 'sub info',
+        }))
+    assert resp.status == 400
+
+
+async def test_unregistering_device_view(hass, hass_client):
+    """Test that the HTML unregister view works."""
+    registrations = {
+        'some device': SUBSCRIPTION_1,
+        'other device': SUBSCRIPTION_2,
+    }
+    client = await mock_client(hass, hass_client, registrations)
+
+    with patch('homeassistant.components.notify.html5.save_json') as mock_save:
+        resp = await client.delete(REGISTER_URL, data=json.dumps({
+            'subscription': SUBSCRIPTION_1['subscription'],
+        }))
+
+    assert resp.status == 200
+    assert len(mock_save.mock_calls) == 1
+    assert registrations == {
+        'other device': SUBSCRIPTION_2
+    }
+
+
+async def test_unregister_device_view_handle_unknown_subscription(
+        hass, hass_client):
+    """Test that the HTML unregister view handles unknown subscriptions."""
+    registrations = {}
+    client = await mock_client(hass, hass_client, registrations)
+
+    with patch('homeassistant.components.notify.html5.save_json') as mock_save:
+        resp = await client.delete(REGISTER_URL, data=json.dumps({
+            'subscription': SUBSCRIPTION_3['subscription']
+        }))
+
+    assert resp.status == 200, resp.response
+    assert registrations == {}
+    assert len(mock_save.mock_calls) == 0
+
+
+async def test_unregistering_device_view_handles_save_error(
+        hass, hass_client):
+    """Test that the HTML unregister view handles save errors."""
+    registrations = {
+        'some device': SUBSCRIPTION_1,
+        'other device': SUBSCRIPTION_2,
+    }
+    client = await mock_client(hass, hass_client, registrations)
+
+    with patch('homeassistant.components.notify.html5.save_json',
+               side_effect=HomeAssistantError()):
+        resp = await client.delete(REGISTER_URL, data=json.dumps({
+            'subscription': SUBSCRIPTION_1['subscription'],
+        }))
+
+    assert resp.status == 500, resp.response
+    assert registrations == {
+        'some device': SUBSCRIPTION_1,
+        'other device': SUBSCRIPTION_2,
+    }
+
+
+async def test_callback_view_no_jwt(hass, hass_client):
+    """Test that the notification callback view works without JWT."""
+    client = await mock_client(hass, hass_client)
+    resp = await client.post(PUBLISH_URL, data=json.dumps({
+        'type': 'push',
+        'tag': '3bc28d69-0921-41f1-ac6a-7a627ba0aa72'
+    }))
+
+    assert resp.status == 401
+
+
+async def test_callback_view_with_jwt(hass, hass_client):
+    """Test that the notification callback view works with JWT."""
+    registrations = {
+        'device': SUBSCRIPTION_1
+    }
+    client = await mock_client(hass, hass_client, registrations)
+
+    with patch('pywebpush.WebPusher') as mock_wp:
+        await hass.services.async_call('notify', 'notify', {
+            'message': 'Hello',
+            'target': ['device'],
+            'data': {'icon': 'beer.png'}
+        }, blocking=True)
+
+    assert len(mock_wp.mock_calls) == 3
+
+    # WebPusher constructor
+    assert mock_wp.mock_calls[0][1][0] == \
+        SUBSCRIPTION_1['subscription']
+    # Third mock_call checks the status_code of the response.
+    assert mock_wp.mock_calls[2][0] == '().send().status_code.__eq__'
+
+    # Call to send
+    push_payload = json.loads(mock_wp.mock_calls[1][1][0])
+
+    assert push_payload['body'] == 'Hello'
+    assert push_payload['icon'] == 'beer.png'
+
+    bearer_token = "Bearer {}".format(push_payload['data']['jwt'])
+
+    resp = await client.post(PUBLISH_URL, json={
+        'type': 'push',
+    }, headers={AUTHORIZATION: bearer_token})
+
+    assert resp.status == 200
+    body = await resp.json()
+    assert body == {"event": "push", "status": "ok"}
